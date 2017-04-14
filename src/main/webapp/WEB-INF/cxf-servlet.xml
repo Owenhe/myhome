@@ -1,0 +1,46 @@
+<beans xmlns="http://www.springframework.org/schema/beans"
+	xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:jaxws="http://cxf.apache.org/jaxws"
+	xsi:schemaLocation=" http://www.springframework.org/schema/beans 
+		http://www.springframework.org/schema/beans/spring-beans.xsd 
+		http://cxf.apache.org/jaxws http://cxf.apache.org/schemas/jaxws.xsd">
+
+<!-- 	<import resource="classpath:META-INF/cxf/cxf.xml"/> -->
+<!-- 	<import resource="classpath:META-INF/cxf/cxf-extension-soap.xml"/> -->
+<!-- 	<import resource="classpath:META-INF/cxf/cxf-servlet.xml"/> -->
+	<!-- <jaxws:endpoint id="helloWorld" implementor="com.oh.webService.HelloWorldImpl"
+		address="/HelloWorld" /> -->
+	<!-- <jaxws:server id="helloWorld" address="/helloworld"> <jaxws:serviceBean> 
+		<bean class="com.oh.webService.HelloWorldImpl"></bean> </jaxws:serviceBean> 
+		</jaxws:server> -->
+
+	<!-- 配置restful方式的web服务 -->
+<!-- 	<bean id="ps" class="com.oh.webService.HelloWorldImpl"></bean>
+	<jaxrs:server id="personService" address="/p">
+		<jaxrs:serviceBeans>
+			<ref bean="ps" />
+		</jaxrs:serviceBeans>
+		<jaxrs:inInterceptors>
+			<bean class="org.apache.cxf.interceptor.LoggingInInterceptor"></bean>
+		</jaxrs:inInterceptors>
+		<jaxrs:outInterceptors>
+			<bean class="org.apache.cxf.interceptor.LoggingOutInterceptor"></bean>
+		</jaxrs:outInterceptors>
+	</jaxrs:server> -->
+
+	<bean id="userServiceBean" class="com.oh.webService.HelloWorldImpl" />
+	<bean id="inMessageInterceptor" class="org.apache.cxf.interceptor.LoggingInInterceptor"/>
+	<bean id="outLoggingInterceptor" class="org.apache.cxf.interceptor.LoggingOutInterceptor" />
+	<!-- 注意下面的address，这里的address的名称就是访问的WebService的name -->
+	<jaxws:server id="helloWorld" serviceClass="com.oh.webService.HelloWorldImpl" address="/HelloWorld">
+		<jaxws:serviceBean>
+			<!-- 要暴露的 bean 的引用 -->
+			<ref bean="userServiceBean" />
+		</jaxws:serviceBean>
+		<jaxws:inInterceptors>
+			<ref bean="inMessageInterceptor" />
+		</jaxws:inInterceptors>
+		<jaxws:outInterceptors>
+			<ref bean="outLoggingInterceptor" />
+		</jaxws:outInterceptors>
+	</jaxws:server>
+</beans>

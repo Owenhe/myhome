@@ -1,0 +1,344 @@
+package com.dh.enigma.web.console;
+
+import java.math.BigDecimal;
+
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+
+import org.apache.commons.lang3.StringUtils;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.dao.DataAccessException;
+import org.springframework.stereotype.Controller;
+import org.springframework.ui.ModelMap;
+import org.springframework.validation.Errors;
+import org.springframework.validation.ValidationUtils;
+import org.springframework.validation.Validator;
+import org.springframework.web.bind.WebDataBinder;
+import org.springframework.web.bind.annotation.InitBinder;
+import org.springframework.web.bind.annotation.ModelAttribute;
+import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestMethod;
+import org.springframework.web.bind.annotation.RequestParam;
+import org.springframework.web.bind.annotation.SessionAttributes;
+import org.springframework.web.bind.support.SessionStatus;
+
+import com.dh.enigma.domain.Category;
+import com.dh.enigma.domain.Department;
+import com.dh.enigma.domain.ProductCsvDef;
+import com.dh.enigma.domain.Vendor;
+import com.dh.enigma.domain.VendorDropshipStatus;
+import com.dh.enigma.domain.VendorLevelDef;
+import com.dh.enigma.domain.VendorProductStatus;
+import com.dh.enigma.domain.editor.EntityPropertyEditor;
+import com.dh.enigma.domain.editor.PercentageDecimalEditor;
+import com.dh.enigma.domain.validator.ProductCsvDefValidator;
+import com.dh.enigma.domain.validator.StockCsvDefValidator;
+import com.dh.enigma.domain.validator.VendorDropshipStatusValidator;
+import com.dh.enigma.domain.validator.VendorLevelDefValidator;
+import com.dh.enigma.domain.validator.VendorProductStatusValidator;
+import com.dh.enigma.service.CategoryService;
+import com.dh.enigma.service.ProductCsvDefHelper;
+import com.dh.enigma.service.ProductCsvDefService;
+import com.dh.enigma.service.VendorLevelDefService;
+import com.dh.enigma.service.VendorService;
+import com.dh.enigma.type.AutoPublishType;
+import com.dh.enigma.type.ProductStatusType;
+import com.dh.enigma.type.VendorFileType;
+import com.dh.enigma.type.csv.VendorCsvType;
+
+/**
+ * @author York Zuo
+ * @date 27/04/2010
+ */
+
+@Controller
+@SessionAttributes(value={"vendor","productStatusTypes"})
+public class ProductCsvDefAdminController {
+	
+	@Autowired
+	private VendorService vendorService;
+	
+	@Autowired
+	private ProductCsvDefService productCsvDefService;
+	
+	@Autowired
+	private CategoryService categoryService;
+	
+	@Autowired
+	private VendorLevelDefService vendorLevelDefService;
+	
+	@InitBinder
+	void initBinder(WebDataBinder binder){
+		binder.registerCustomEditor(Category.class, new EntityPropertyEditor(Category.class));
+		binder.registerCustomEditor(Department.class, new EntityPropertyEditor(Department.class));
+		binder.registerCustomEditor(BigDecimal.class, "vendorLevelDef.dhMarkup",
+				new PercentageDecimalEditor());
+		binder.registerCustomEditor(BigDecimal.class, "vendorLevelDef.calPercentage",
+				new PercentageDecimalEditor());
+		binder.registerCustomEditor(BigDecimal.class, "vendorLevelDef.merchVatPercent",
+				new PercentageDecimalEditor());
+	}	
+	
+	@RequestMapping(value="/vendor/csvDef/list.htm", 
+			method=RequestMethod.GET,params={"vendor"})
+	public String handList(ModelMap model, 
+			@RequestParam(value="fileType", required=false)String fileType,
+			@RequestParam(value="vendor")Long id){
+		String view = handAction(id, fileType, model);
+		return view;
+	}
+	
+	@RequestMapping(value="/vendor/csvDef/edit.htm", 
+			method=RequestMethod.GET,params={"vendor"})
+	public String handEditGet(
+			@RequestParam(value="vendor")Long id,
+			@RequestParam(value="fileType", required=false)String fileType,
+			@RequestParam()VendorCsvType type, ModelMap model){
+		
+		Vendor vendor = vendorService.readVendor(id);
+		if (fileType == null) {
+			fileType = VendorFileType.CSV.name();
+		}
+		vendor.setVendorFileType(VendorFileType.valueOf(fileType));
+		List<ProductCsvDef> csvDef = productCsvDefService.getCustomCsvMappingToEdit(vendor, type);
+		ProductCsvDefHelper helper = type.getMetadata();
+		vendor.setCsvDef(csvDef);
+		VendorLevelDef levelDef = vendorLevelDefService.getVendorLevelDefToEdit(vendor, type.getName());
+		vendor.setVendorLevelDef(levelDef);
+		model.addAttribute("vendor", vendor);
+		model.addAttribute("type", type);
+		model.addAttribute("csvDefs", helper.getProductPropNames());
+		//EMA-1867 all product type will use auto-pub.
+		model.addAttribute("departments", categoryService.readDepartments4AutoPublish());
+		model.addAttribute("autoPubTypes", AutoPublishType.values());
+		initCsvVendorCategoryData(levelDef, model);
+		
+		if(type== VendorCsvType.DOM){
+			vendor.setVendorProductStatuses(vendorService.readVendorProductStatuses(id) );
+			vendor.setStockCsvDef(productCsvDefService.getCustomCsvMappingToEdit(vendor, VendorCsvType.DOM_STOCK));
+			model.addAttribute("stockCsvDefRequiredMap",VendorCsvType.DOM_STOCK.getMetadata().getProductPropNames());
+		}
+		model.addAttribute("productStatusTypes", ProductStatusType.values());
+		return "vendor/csvDef/edit";
+	}
+	
+	@RequestMapping(value="/vendor/hindaCsvDef/edit.htm", method=RequestMethod.POST)
+	public String handEditPost4Hinda(@ModelAttribute()Vendor vendor, Errors errors,
+			ModelMap model,SessionStatus status,
+			@RequestParam(value="act",required=false)String action,
+			@RequestParam(value="idx",required=false)Integer idx,
+			@RequestParam(value="fileType", required=false)String fileType) {
+		
+		if (StringUtils.isNotBlank(action)) {
+			if (ADD_DROPSHIP_STATUS.equals(action)) {
+				vendor.getVendorLevelDef().getVendorDropshipStatuses().add(new VendorDropshipStatus());
+			} else if (DEL_DROPSHIP_STATUS.equals(action)) {
+				vendor.getVendorLevelDef().getVendorDropshipStatuses().remove(idx.intValue());
+			}
+			model.addAttribute("vendor", vendor);
+			ProductCsvDefHelper helper = VendorCsvType.HINDA.getMetadata();
+			model.addAttribute("csvDefs", helper.createDefaultCsvMapping());
+			model.addAttribute("headColumnDefs", helper.getProductPropNames());
+			return "vendor/csvDef/hindaList";
+			
+		}
+		
+		
+		Validator vali = new VendorLevelDefValidator();
+		ValidationUtils.invokeValidator(vali, vendor, errors);
+		
+		if (vendor.getVendorLevelDef().isCustomDropshipStatusMapping()) {
+			Validator	validator=new VendorDropshipStatusValidator(VendorCsvType.HINDA);
+			ValidationUtils.invokeValidator(validator, vendor, errors);
+		}
+		
+		if(!errors.hasErrors()) {
+			VendorLevelDef def = vendor.getVendorLevelDef();
+			def.setVendor(vendor);
+			def.setType(VendorCsvType.HINDA);
+			if (def.getDhMarkup() == null) def.setDhMarkup(BigDecimal.ZERO);
+		}
+		if(!errors.hasErrors()){
+			vendorLevelDefService.mergeLevelDef4Hinda(vendor);
+			status.setComplete();
+			return "redirect:/vendor/edit.htm?id="+vendor.getId().toString();
+		}else{
+			model.addAttribute("vendor", vendor);
+			ProductCsvDefHelper helper = VendorCsvType.HINDA.getMetadata();
+			model.addAttribute("csvDefs", helper.createDefaultCsvMapping());
+			model.addAttribute("headColumnDefs", helper.getProductPropNames());
+			return "vendor/csvDef/hindaList";
+		}
+	}
+	
+	@RequestMapping(value="/vendor/csvDef/edit.htm", 
+			method=RequestMethod.POST)
+	public String handEditPost(@ModelAttribute()Vendor vendor, Errors errors,
+			@RequestParam()VendorCsvType type, 
+			@RequestParam(value="act",required=false)String action,
+			@RequestParam(value="idx",required=false)Integer idx,
+			@RequestParam(value="fileType", required=false)String fileType,
+			ModelMap model,SessionStatus status){
+		
+		model.addAttribute("type", type);
+		if (fileType == null || "".equals(fileType)) {
+			fileType = "CSV";
+		}
+		model.addAttribute("autoPubTypes", AutoPublishType.values());
+		if (StringUtils.isNotBlank(action)) {
+			if (ADD_PRODUCT_STATUS.equals(action)) {
+				vendor.getVendorProductStatuses()
+						.add(new VendorProductStatus());
+			}else if(DEL_PRODUCT_STATUS.equals(action)){
+				vendor.getVendorProductStatuses().remove(idx.intValue());
+			} else if (ADD_DROPSHIP_STATUS.equals(action)) {
+				vendor.getVendorLevelDef().getVendorDropshipStatuses().add(new VendorDropshipStatus());
+			} else if (DEL_DROPSHIP_STATUS.equals(action)) {
+				vendor.getVendorLevelDef().getVendorDropshipStatuses().remove(idx.intValue());
+			}
+			initCsvVendorCategoryData(vendor.getVendorLevelDef(), model);
+			model.addAttribute("departments", categoryService.readDepartments4AutoPublish());
+			return "vendor/csvDef/edit";
+		}
+		
+		if(!errors.hasErrors() && vendor.isCustomCsvDef(type)){
+			Validator validator = new ProductCsvDefValidator(type);
+			ValidationUtils.invokeValidator(validator, vendor, errors);
+		}
+		if(VendorCsvType.DOM.equals(type)){
+			if(vendor.isCustomStockCsvDef()){
+				
+			}
+			
+			if(vendor.isCustomProductStatusMapping()){
+				Validator	validator=new VendorProductStatusValidator();
+				ValidationUtils.invokeValidator(validator, vendor, errors);
+			}
+			
+			if(vendor.isCustomStockCsvDef()){
+				Validator	validator=new StockCsvDefValidator();
+				ValidationUtils.invokeValidator(validator, vendor, errors);
+			}
+			initCsvVendorCategoryData(vendor.getVendorLevelDef(), model);
+			model.addAttribute("stockCsvDefRequiredMap",VendorCsvType.DOM_STOCK.getMetadata().getProductPropNames());
+		}
+		
+		if (vendor.getVendorLevelDef().isCustomDropshipStatusMapping()) {
+			Validator	validator=new VendorDropshipStatusValidator(type);
+			ValidationUtils.invokeValidator(validator, vendor, errors);
+		}
+		
+		Validator vali = new VendorLevelDefValidator();
+		ValidationUtils.invokeValidator(vali, vendor, errors);
+		
+		
+		if(!errors.hasErrors()) {
+			VendorLevelDef def = vendor.getVendorLevelDef();
+			def.setVendor(vendor);
+			def.setType(type);
+			if (def.getDhMarkup() == null) def.setDhMarkup(BigDecimal.ZERO);
+		}
+		
+		if(!errors.hasErrors()){
+			//S2044
+			if (!vendor.getVendorLevelDef().isCustomAutopublish()) {
+				vendor.getVendorLevelDef().setCustomDepartment(null);
+			}
+			vendorService.updateVendorCsvDef(vendor,type);
+			status.setComplete();
+			return "redirect:/vendor/csvDef/list.htm?vendor="+vendor.getId().toString() + "&fileType=" + fileType;
+		}else{
+			model.addAttribute("vendor", vendor);
+			model.addAttribute("type", type);
+			ProductCsvDefHelper helper = type.getMetadata();
+			model.addAttribute("csvDefs", helper.getProductPropNames());
+			model.addAllAttributes(errors.getAllErrors());
+			model.addAttribute("departments", categoryService.readDepartments4AutoPublish());
+			return "vendor/csvDef/edit";
+		}
+	}
+	
+	private void initCsvVendorCategoryData(VendorLevelDef def, ModelMap model){
+		//seven
+		Category filterCategory = def.getCustomCategory();
+		if (filterCategory != null) {
+			try {
+				filterCategory = categoryService.readCategoryById(filterCategory.getId());
+//				filterCategory = categoryService.readCategoryById(2L);
+			} catch (DataAccessException ex) {
+				filterCategory = null;
+			}
+		}
+		def.setCustomCategory(filterCategory);
+		List<Category> selectedCategories=new ArrayList<Category>();
+		Map<Long, List<Category>> siblings = new HashMap<Long, List<Category>>();
+		if (def.getCustomCategory() != null) {
+			Category category = categoryService.readCategoryById(def.getCustomCategory().getId());
+			def.setCustomCategory(category);
+			selectedCategories = categoryService
+					.readAncestorsByPath(def.getCustomCategory().getPath());
+			
+			for (Category c : selectedCategories) {
+				siblings.put(c.getId(), categoryService.readSiblings(c.getId()));
+			}
+/* for DE15134
+			if (!categoryService.isLeaf(vendor.getCustomDomCategory())) {
+				Category dummy = new Category();
+				dummy.setId(-1L);
+				selectedCategories.add(dummy);
+				siblings.put(dummy.getId(), categoryService
+						.readSubCategories(vendor.getCustomDomCategory().getId()));
+			}
+*/
+		}
+			
+			model.addAttribute("selectedCategories", selectedCategories);
+			model.addAttribute("siblings", siblings);
+		
+		
+	}
+	
+	private String handAction(Long id, String fileType, ModelMap model){
+		
+		Vendor vendor = vendorService.readVendor(id);
+		if (fileType == null) {
+			fileType = VendorFileType.CSV.name();
+		}
+		vendor.setVendorFileType(VendorFileType.valueOf(fileType));
+		
+		model.addAttribute("vendor", vendor);
+		ProductCsvDefHelper helper = null;
+		if(vendor.getVendorNumber().equals(HindaConstants.HINDA_VENDOR_NUMBER)){
+			VendorLevelDef def = vendorLevelDefService.getVendorLevelDefToEdit(vendor, VendorCsvType.HINDA.getName());
+			vendor.setVendorLevelDef(def);
+			helper = VendorCsvType.HINDA.getMetadata();
+			model.addAttribute("csvDefs", helper.createDefaultCsvMapping());
+			model.addAttribute("headColumnDefs", helper.getProductPropNames());
+			return "vendor/csvDef/hindaList";
+		}
+		model.addAttribute("csvDefs",productCsvDefService.getCsvMapping(vendor));
+		helper = VendorCsvType.DOM.getMetadata();
+		model.addAttribute("domCsvDefs", helper.getProductPropNames());
+		
+		helper = VendorCsvType.INTL_V.getMetadata();
+		model.addAttribute("intlVCsvDefs", helper.getProductPropNames());
+		
+		helper = VendorCsvType.INTL_M.getMetadata();
+		model.addAttribute("intlMCsvDefs", helper.getProductPropNames());
+		
+		if (fileType != null) {
+			model.addAttribute("fileType", fileType);
+		}
+		return "vendor/csvDef/list";
+	}
+	
+	private static final String ADD_PRODUCT_STATUS="ADD_PRODUCT_STATUS";
+	private static final String DEL_PRODUCT_STATUS="DEL_PRODUCT_STATUS";
+	
+	private static final String ADD_DROPSHIP_STATUS="ADD_DROPSHIP_STATUS";
+	private static final String DEL_DROPSHIP_STATUS="DEL_DROPSHIP_STATUS";
+	
+	
+}
