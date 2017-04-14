@@ -1,1 +1,1 @@
-# myhome
+# Spring MVC + mybatis + jsp demo
